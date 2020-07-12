@@ -9,19 +9,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import org.apache.commons.codec.binary.Hex;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import com.google.common.primitives.Bytes;
 
 import io.pkts.PacketHandler;
 import io.pkts.Pcap;
 import io.pkts.buffer.Buffer;
-import io.pkts.packet.IPv4Packet;
-import io.pkts.packet.IPv6Packet;
 import io.pkts.packet.Packet;
-import io.pkts.packet.TCPPacket;
 import io.pkts.packet.UDPPacket;
 import io.pkts.protocol.Protocol;
 
@@ -34,100 +28,104 @@ public class Main {
 
     Map<String, String> dnsMap = new HashMap<>();
 
+    logger.info("protocol,source host,source ip,source port,destination host,destination ip,destination port");
+
     pcap.loop(new PacketHandler() {
       @Override
       public boolean nextPacket(Packet packet) throws IOException {
 
-        String sourceIP = null;
-        String destinationIP = null;
-        int sourcePort = 0;
-        int destinationPort = 0;
-        String protocol = null;
+        PacketHeader header = new PacketHeader();
 
-        if (packet.hasProtocol(Protocol.IPv4)) {
-          IPv4Packet ipv4Packet = (IPv4Packet) packet.getPacket(Protocol.IPv4);
-          sourceIP = ipv4Packet.getSourceIP();
-          destinationIP = ipv4Packet.getDestinationIP();
-        } else if (packet.hasProtocol(Protocol.IPv6)) {
-          IPv6Packet ipv6Packet = (IPv6Packet) packet.getPacket(Protocol.IPv4);
-          sourceIP = ipv6Packet.getSourceIP();
-          destinationIP = ipv6Packet.getDestinationIP();
-        } else {
-          logger.warn("IP以外のプロトコル");
-        }
+        header.setIP(packet);
 
-        if (packet.hasProtocol(Protocol.TCP)) {
-          TCPPacket tcpPacket = (TCPPacket) packet.getPacket(Protocol.TCP);
-          sourcePort = tcpPacket.getSourcePort();
-          destinationPort = tcpPacket.getDestinationPort();
-          protocol = "TCP";
-        } else if (packet.hasProtocol(Protocol.UDP)) {
-          UDPPacket udpPacket = (UDPPacket) packet.getPacket(Protocol.UDP);
-          sourcePort = udpPacket.getSourcePort();
-          destinationPort = udpPacket.getDestinationPort();
-          protocol = "UDP";
-        }
+        header.setPortAndProtocol(packet);
 
-        String sourceHost = dnsMap.get(sourceIP);
-        if (sourceHost == null)
-          sourceHost = "";
-        String destinationHost = dnsMap.get(destinationIP);
-        if (destinationHost == null)
-          destinationHost = "";
-        logger.info("{} {}({}):{} -> {}({}):{}", protocol, sourceHost, sourceIP, sourcePort, destinationHost,
-            destinationIP, destinationPort);
+        header.setDomain(dnsMap);
 
-        if (packet.hasProtocol(Protocol.UDP) && sourcePort == 53) {
-          UDPPacket udpPacket = (UDPPacket) packet.getPacket(Protocol.UDP);
-          Buffer buffer = udpPacket.getPayload();
+        header.printCsv();
 
-          if (buffer != null) {
-            // TODO 長さ指定は適当に済ませている
-            int length = buffer.getReadableBytes();
-            byte[] bytes = new byte[length];
-
-            buffer.getBytes(bytes);
-
-            int fromIndex = 0;
-            int toIndex = 0;
-            String domain = null;
-
-            while (fromIndex < length) {
-              // 0x00で区切る
-              toIndex = findKey(bytes, fromIndex, length, (byte) 0x00);
-              if (toIndex < fromIndex) {
-                toIndex = length;
-              }
-              byte[] subbytes = Arrays.copyOfRange(bytes, fromIndex, toIndex);
-
-              // ドメインだと思って変換する
-              String temp = bytesToDomain(subbytes);
-              // 変換してうまくいった場合のみ採用する
-              if (temp != null && temp.matches("[a-zA-Z0-9\\.\\-]*")) {
-                domain = temp;
-                fromIndex = toIndex + 1;
-                continue;
-              }
-
-              // IPアドレスと思われる場合も変換する
-              if (subbytes.length > 4 && subbytes[0] == 4) {
-                String ip = bytesToIP(Arrays.copyOfRange(subbytes, 1, 5));
-                // 変換してうまくいった場合のみ採用する
-                if (ip != null && ip.matches("[0-9\\.]*")) {
-                  logger.info("domain = {}, IP = {}", domain, ip);
-                  dnsMap.put(ip, domain);
-                }
-              }
-
-              fromIndex = toIndex + 1;
-            }
-          }
+        if (header.getSrcPort() == 53 && packet.hasProtocol(Protocol.UDP)) {
+          extractDomain(dnsMap, packet);
         }
         return true;
       }
     });
   }
 
+  /**
+   * DNS応答パケットからドメインとIPの情報を取り出してdnsMapに格納する
+   * 
+   * @param dnsMap
+   * @param packet
+   * @throws IOException
+   */
+  private static void extractDomain(Map<String, String> dnsMap, Packet packet) throws IOException {
+    UDPPacket udpPacket = (UDPPacket) packet.getPacket(Protocol.UDP);
+    Buffer buffer = udpPacket.getPayload();
+
+    if (buffer != null) {
+      byte[] bytes = buffer.getArray();
+      String domain = null;
+
+      // 配列を0x00で区切る
+      List<byte[]> list = split(bytes, (byte) 0x00);
+
+      // 区切られた配列のそれぞれに対して、ドメイン部分、IPアドレス部分を取得する
+      for (int i = 0; i < list.size(); i++) {
+        byte[] b = list.get(i);
+        // ドメインだと仮定して変換する
+        String temp = bytesToDomain(b);
+        // 変換してうまくいった場合のみ採用する
+        if (temp != null && temp.matches("[a-zA-Z0-9\\.\\-]*")) {
+          domain = temp;
+          continue;
+        }
+
+        // IPアドレスである可能性がある場合はIPアドレスだと仮定して変換する
+        if (b.length > 4 && b[0] == 4) {
+          String ip = bytesToIP(Arrays.copyOfRange(b, 1, 5));
+          // 変換した結果、成功したと思われる場合のみ採用する
+          if (ip != null && ip.matches("[0-9\\.]*")) {
+            logger.debug("domain = {}, IP = {}", domain, ip);
+            dnsMap.put(ip, domain);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * バイト配列をdelimiterで区切る。連続したdelimiterがある場合は結果に含めない
+   * 
+   * @param bytes
+   * @param delimiter
+   * @return
+   */
+  private static List<byte[]> split(byte[] bytes, byte delimiter) {
+    int length = bytes.length;
+
+    List<byte[]> list = new ArrayList<>();
+    int from = 0;
+    boolean findingDelimeter = true;
+    for (int i = 0; i < length; i++) {
+      if (bytes[i] == delimiter && findingDelimeter) {
+        list.add(Arrays.copyOfRange(bytes, from, i));
+        findingDelimeter = false;
+      } else if (bytes[i] != delimiter && !findingDelimeter) {
+        from = i;
+        findingDelimeter = true;
+      }
+    }
+    list.add(Arrays.copyOfRange(bytes, from, length));
+    return list;
+  }
+
+  /**
+   * バイト配列をfoo.example.comのようなドメイン形式に変換する
+   * 
+   * @param bytes
+   * @return
+   */
   private static String bytesToDomain(byte[] bytes) {
     if (bytes.length < 3) {
       return null;
@@ -146,18 +144,21 @@ public class Main {
     return domain.stream().collect(Collectors.joining("."));
   }
 
-  private static int findKey(byte[] bytes, int fromIndex, int toIndex, byte key) {
-    byte[] subArray = Arrays.copyOfRange(bytes, fromIndex, toIndex);
-    return Bytes.indexOf(subArray, key) + fromIndex;
-  }
-
+  /**
+   * バイト配列を192.168.1.1のようなIPアドレス形式に変換する
+   * 
+   * @param bytes
+   * @return
+   */
   private static String bytesToIP(byte[] bytes) {
-    char[] c = Hex.encodeHex(bytes);
-    int i0 = Integer.parseInt(String.valueOf(Arrays.copyOfRange(c, 0, 2)), 16);
-    int i1 = Integer.parseInt(String.valueOf(Arrays.copyOfRange(c, 2, 4)), 16);
-    int i2 = Integer.parseInt(String.valueOf(Arrays.copyOfRange(c, 4, 6)), 16);
-    int i3 = Integer.parseInt(String.valueOf(Arrays.copyOfRange(c, 6, 8)), 16);
-
-    return String.format("%d.%d.%d.%d", i0, i1, i2, i3);
+    String[] strs = new String[4];
+    for (int i = 0; i < 4; i++) {
+      if (bytes[i] < 0) {
+        strs[i] = String.valueOf(bytes[i] + 256);
+      } else {
+        strs[i] = String.valueOf(bytes[i]);
+      }
+    }
+    return String.format("%s.%s.%s.%s", strs[0], strs[1], strs[2], strs[3]);
   }
 }

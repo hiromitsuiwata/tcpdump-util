@@ -2,11 +2,21 @@
 
   <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
     <encoder>
-      <pattern>%d{HH:mm:ss.SSS} %-5level %logger{30} - %msg%n</pattern>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{30} %method - %msg%n</pattern>
     </encoder>
   </appender>
+  
+  <appender name="STDOUT_MSG_ONLY" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%msg%n</pattern>
+    </encoder>
+  </appender>
+  
+  <logger name="com.github.hiromitsu7.tcpdumputil.PacketHeader" level="INFO" additivity="false">
+  	<appender-ref ref="STDOUT_MSG_ONLY" />
+  </logger>
 
-  <root level="debug">
+  <root level="DEBUG">
     <appender-ref ref="STDOUT" />
   </root>
 </configuration>
