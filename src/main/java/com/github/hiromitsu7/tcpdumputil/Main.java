@@ -28,7 +28,8 @@ public class Main {
 
     Map<String, String> dnsMap = new HashMap<>();
 
-    logger.info("protocol,source host,source ip,source port,destination host,destination ip,destination port");
+    PacketHeader header = new PacketHeader();
+    header.printCsvHeader();
 
     pcap.loop(new PacketHandler() {
       @Override
@@ -73,6 +74,7 @@ public class Main {
       // 区切られた配列のそれぞれに対して、ドメイン部分、IPアドレス部分を取得する
       for (int i = 0; i < list.size(); i++) {
         byte[] b = list.get(i);
+
         // ドメインだと仮定して変換する
         String temp = bytesToDomain(b);
         // 変換してうまくいった場合のみ採用する
@@ -127,7 +129,7 @@ public class Main {
    * @return
    */
   private static String bytesToDomain(byte[] bytes) {
-    if (bytes.length < 3) {
+    if (bytes.length < 4) {
       return null;
     }
     List<String> domain = new ArrayList<>();

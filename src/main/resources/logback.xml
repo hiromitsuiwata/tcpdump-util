@@ -16,7 +16,7 @@
   	<appender-ref ref="STDOUT_MSG_ONLY" />
   </logger>
 
-  <root level="DEBUG">
+  <root level="debug">
     <appender-ref ref="STDOUT" />
   </root>
 </configuration>

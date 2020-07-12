@@ -85,11 +85,19 @@ public class PacketHeader {
       dstDomain = "";
   }
 
+  void printCsvHeader() {
+    logger.info("protocol,source host,source ip,source port,destination host,destination ip,destination port");
+  }
+
   /**
    * CSV形式で出力する
    */
   void printCsv() {
     String line = String.format("%s,%s,%s,%s,%s,%s,%s", protocol, srcDomain, srcIP, srcPort, dstDomain, dstIP, dstPort);
-    logger.info(line);
+    if (protocol.equals("TCP")) {
+      logger.info(line);
+    } else if (protocol.equals("UDP")) {
+      logger.debug(line);
+    }
   }
 }
